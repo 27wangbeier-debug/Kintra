@@ -23,18 +23,20 @@ const KintraServices=(()=>{
  function segmentDistance(point,a,b){const lat=point[0]*Math.PI/180,sx=111320*Math.cos(lat),sy=110540;const ax=(a[1]-point[1])*sx,ay=(a[0]-point[0])*sy,bx=(b[1]-point[1])*sx,by=(b[0]-point[0])*sy;const dx=bx-ax,dy=by-ay,t=Math.max(0,Math.min(1,-(ax*dx+ay*dy)/(dx*dx+dy*dy||1)));return Math.hypot(ax+t*dx,ay+t*dy)}
  function proximity(coords,point){let d=Infinity;for(let i=1;i<coords.length;i++)d=Math.min(d,segmentDistance(point,[coords[i-1][1],coords[i-1][0]],[coords[i][1],coords[i][0]]));return d}
  function scoreRoute(route,concerns){const nearby=concerns.map(c=>({...c,metres:proximity(route.coordinates,[c.lat,c.lng])})).filter(c=>c.metres<80);return {...route,nearby,concernScore:nearby.reduce((sum,c)=>sum+(c.weight||2)*(1-c.metres/160),0)}}
- function distinct(a,b){let away=0;const step=Math.max(1,Math.floor(a.coordinates.length/50));let n=0;for(let i=0;i<a.coordinates.length;i+=step){n++;const p=a.coordinates[i];if(proximity(b.coordinates,[p[1],p[0]])>25)away++}return away/n>.08}
+ function samplePath(coordinates,count=60){const segments=[],cos=Math.cos(coordinates[0][1]*Math.PI/180);let total=0;for(let i=1;i<coordinates.length;i++){const a=coordinates[i-1],b=coordinates[i],length=Math.hypot((b[0]-a[0])*111320*cos,(b[1]-a[1])*110540);segments.push(length);total+=length}if(!total)return Array(count).fill(coordinates[0]);const samples=[];let segment=0,walked=0;for(let n=0;n<count;n++){const target=total*n/(count-1);while(segment<segments.length-1&&walked+segments[segment]<target){walked+=segments[segment++]}const a=coordinates[segment],b=coordinates[segment+1],t=segments[segment]?Math.min(1,(target-walked)/segments[segment]):0;samples.push([a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t])}return samples}
+ function distinct(a,b){const samples=samplePath(a.coordinates);return samples.filter(p=>proximity(b.coordinates,[p[1],p[0]])>35).length/samples.length>.12}
+ function detourWaypoints(route,offset,side){const samples=samplePath(route.coordinates),a=samples[18],b=samples[40],lat=(a[1]+b[1])/2,cos=Math.max(.1,Math.cos(lat*Math.PI/180)),dx=(b[0]-a[0])*111320*cos,dy=(b[1]-a[1])*110540,length=Math.hypot(dx,dy)||1;return [a,b].map(p=>[p[1]+dx/length*offset*side/110540,p[0]-dy/length*offset*side/(111320*cos)])}
  async function routes(start,end,via,concerns=[]){
-  const raw=await walking([start,end],true);let candidates=raw.map(r=>scoreRoute(r,concerns)),fast=[...candidates].sort((a,b)=>a.duration-b.duration)[0],warning='';
-  const problem=[...fast.nearby].sort((a,b)=>(b.weight||2)-(a.weight||2))[0];
-  const waypoints=[];if(via)waypoints.push(via);
-  if(problem){const lat=(start[0]+end[0])/2,cos=Math.cos(lat*Math.PI/180),dx=(end[1]-start[1])*cos,dy=end[0]-start[0],length=Math.hypot(dx,dy)||1;for(const side of [-1,1]){const offset=side*190/111320;waypoints.push([problem.lat+dx/length*offset,problem.lng-dy/length*offset/cos])}}
-  for(const waypoint of waypoints.slice(0,2)){try{const extra=await walking([start,waypoint,end]);candidates.push(...extra.map(r=>scoreRoute(r,concerns)))}catch{warning='Some detours were unavailable.'}}
-  fast=[...candidates].sort((a,b)=>a.duration-b.duration)[0];const alternatives=candidates.filter(r=>distinct(r,fast)&&r.duration<=Math.max(fast.duration*1.8,fast.duration+600));
-  const ranked=alternatives.sort((a,b)=>a.concernScore-b.concernScore||a.duration-b.duration);let safer=ranked[0]||null;
-  if(!safer)warning='Only one distinct walking route was found. Both preferences use the same path.';
-  else if(safer.concernScore>=fast.concernScore-.1)warning='No alternative with fewer reported concerns was found. Compare the paths before choosing.';
-  return {fast,safer:safer||fast,samePath:!safer,lowerConcern:!!safer&&safer.concernScore<fast.concernScore-.1,source:'live',warning,updatedAt:new Date().toISOString()};
+  const raw=await walking([start,end],true);let candidates=raw.map(r=>scoreRoute(r,concerns)),fast=[...candidates].sort((a,b)=>a.duration-b.duration)[0];
+  const acceptable=r=>distinct(r,fast)&&r.duration<=Math.max(fast.duration*2.5,fast.duration+1800);
+  const problem=[...fast.nearby].sort((a,b)=>(b.weight||2)-(a.weight||2))[0];const attempts=[];
+  if(via)attempts.push([via]);
+  if(problem){const mid=fast.coordinates[Math.floor(fast.coordinates.length/2)],cos=Math.max(.1,Math.cos(mid[1]*Math.PI/180));for(const side of [-1,1])attempts.push([[problem.lat+side*180/110540,problem.lng+side*180/(111320*cos)]])}
+  const baseOffset=Math.max(180,Math.min(1800,fast.distance*.055));for(const factor of [1,2.2])for(const side of [-1,1])attempts.push(detourWaypoints(fast,baseOffset*factor,side));
+  let attempted=0;for(const waypoints of attempts){if(candidates.some(acceptable)&&(!problem||attempted>=2))break;try{const extra=await walking([start,...waypoints,end]);candidates.push(...extra.map(r=>scoreRoute(r,concerns)))}catch{}attempted++}
+  fast=[...candidates].sort((a,b)=>a.duration-b.duration)[0];const alternatives=candidates.filter(acceptable).sort((a,b)=>a.concernScore-b.concernScore||a.duration-b.duration),safer=alternatives[0]||null;
+  const lowerConcern=!!safer&&safer.concernScore<fast.concernScore-.1;const warning=!safer?'No different walking route was available for these points. Move a pin or try nearby streets.':lowerConcern?'Alternative passes fewer mapped concerns. Safety is not verified.':'Alternative follows a different walking path; it is not a verified safer route.';
+  return {fast,safer,samePath:false,lowerConcern,source:'live',warning,updatedAt:new Date().toISOString()};
  }
- return {geocode,routes,pointValid,featurePlace,normalize,segmentDistance,proximity,scoreRoute,distinct};
+ return {geocode,routes,pointValid,featurePlace,normalize,segmentDistance,proximity,scoreRoute,distinct,samplePath,detourWaypoints};
 })();
