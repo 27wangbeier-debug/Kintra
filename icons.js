@@ -1,4 +1,7 @@
 const iconPaths={
+walk:'<circle cx="14" cy="4" r="2"/><path d="m7 21 4-8m5 8-3-6 1-8-4 4H6m8-4 3 5h4"/>',
+car:'<path d="m5 7 2-4h10l2 4 2 3v9h-3v-3H6v3H3v-9Z"/><path d="M5 7h14M3 11h18M6 13h2m8 0h2"/>',
+
 home:'<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
 map:'<path d="m3 5 6-2 6 2 6-2v16l-6 2-6-2-6 2Z"/><path d="M9 3v16M15 5v16"/>',
 report:'<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M12 7v10M7 12h10"/>',
